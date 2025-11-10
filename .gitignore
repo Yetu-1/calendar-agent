@@ -207,4 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 #Secrets
-service_account.json
+**/service_account.json
