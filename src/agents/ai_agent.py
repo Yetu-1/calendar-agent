@@ -1,126 +1,103 @@
 import json
-from typing import List, Tuple
-
+from typing import List
+import asyncio
 from autogen_core import (
     FunctionCall,
     MessageContext,
     RoutedAgent,
-    SingleThreadedAgentRuntime,
-    TopicId,
-    TypeSubscription,
     message_handler,
+    CancellationToken,
 )
-
 from autogen_core.models import (
-    AssistantMessage,
     ChatCompletionClient,
-    FunctionExecutionResult,
-    FunctionExecutionResultMessage,
     LLMMessage,
     SystemMessage,
     UserMessage,
+    AssistantMessage,
+    FunctionExecutionResult,
+    FunctionExecutionResultMessage,
 )
-from autogen_core.tools import FunctionTool, Tool
-from autogen_ext.models.openai import OpenAIChatCompletionClient
-from pydantic import BaseModel
+from autogen_core.tools import Tool
+from src.utils.messages import Message
 
-from src.utils.messages import (
-    UserTask,
-    AgentResponse,
-)
-
-class AIAgent(RoutedAgent):
-    def __init__(
-        self,
-        description: str,
-        system_message: SystemMessage,
-        model_client: ChatCompletionClient,
-        tools: List[Tool],
-        delegate_tools: List[Tool],
-        agent_topic_type: str,
-        user_topic_type: str,
-    ) -> None:
-        super().__init__(description)
-        self._system_message = system_message
+class CalendarAssistantAgent(RoutedAgent):
+    def __init__(self, model_client: ChatCompletionClient, tool_schema: List[Tool]) -> None:
+        super().__init__("An calendar assistant agent.")
+        self._system_messages: List[LLMMessage] = [
+            SystemMessage(content="You are a helpful Google Calendar Assistant that can:\n"
+                "- Create google calendar events\n"
+                "- Delete google calendar events\n"
+                "- Read google calendar events and show the user\n"
+                "- Reshecdule google calendar events\n"
+                "--- Follow the routine below when interacting with the user:\n"
+                "1. Always get the current date, time and timezone using the appropriate tool.\n"
+                "2. Ask them the details of the event they want to add to their calendar including the title of the event, time it starts and how long it is.\n"
+                "3. Always Show the event created to the user in readable form and ask for a confirmation of details. "
+                "Also, display the event in the required Google Calendar event JSON format.\n"
+                "4. Once the user is satisfied, go on to add the event to their google calendar using the appropriate tool.\n"
+                "Before adding an event to the calendar, always check the time slot in the calendar to ensure there are no conflicts."
+                "If another event exists at the same time, inform the user and ask whether to proceed.\n"
+                "When rescheduling events use the appropriate tool to first read and confirm the event. "
+                "Then ask the user for confirmation before updating it.\n"
+            )
+        ]
         self._model_client = model_client
-        self._tools = dict([(tool.name, tool) for tool in tools])
-        self._tool_schema = [tool.schema for tool in tools]
-        self._delegate_tools = dict([(tool.name, tool) for tool in delegate_tools])
-        self._delegate_tool_schema = [tool.schema for tool in delegate_tools]
-        self._agent_topic_type = agent_topic_type
-        self._user_topic_type = user_topic_type
+        self._tools = tool_schema
 
     @message_handler
-    async def handle_task(self, message: UserTask, ctx: MessageContext) -> None:
-        # Send the task to the LLM.
+    async def handle_user_message(self, message: Message, ctx: MessageContext) -> Message:
+        # Create a session of messages.
+        session: List[LLMMessage] = self._system_messages + [UserMessage(content=message.content, source="user")]
+
+        # Run the chat completion with the tools.
         llm_result = await self._model_client.create(
-            messages=[self._system_message] + message.context,
-            tools=self._tool_schema + self._delegate_tool_schema,
+            messages=session,
+            tools=self._tools,
             cancellation_token=ctx.cancellation_token,
         )
         print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
-        # Process the LLM result.
-        while isinstance(llm_result.content, list) and all(isinstance(m, FunctionCall) for m in llm_result.content):
-            tool_call_results: List[FunctionExecutionResult] = []
-            delegate_targets: List[Tuple[str, UserTask]] = []
-            # Process each function call.
-            for call in llm_result.content:
-                arguments = json.loads(call.arguments)
-                if call.name in self._tools:
-                    # Execute the tool directly.
-                    result = await self._tools[call.name].run_json(arguments, ctx.cancellation_token)
-                    result_as_str = self._tools[call.name].return_value_as_string(result)
-                    tool_call_results.append(
-                        FunctionExecutionResult(call_id=call.id, content=result_as_str, is_error=False, name=call.name)
-                    )
-                elif call.name in self._delegate_tools:
-                    # Execute the tool to get the delegate agent's topic type.
-                    result = await self._delegate_tools[call.name].run_json(arguments, ctx.cancellation_token)
-                    topic_type = self._delegate_tools[call.name].return_value_as_string(result)
-                    # Create the context for the delegate agent, including the function call and the result.
-                    delegate_messages = list(message.context) + [
-                        AssistantMessage(content=[call], source=self.id.type),
-                        FunctionExecutionResultMessage(
-                            content=[
-                                FunctionExecutionResult(
-                                    call_id=call.id,
-                                    content=f"Transferred to {topic_type}. Adopt persona immediately.",
-                                    is_error=False,
-                                    name=call.name,
-                                )
-                            ]
-                        ),
-                    ]
-                    delegate_targets.append((topic_type, UserTask(context=delegate_messages)))
-                else:
-                    raise ValueError(f"Unknown tool: {call.name}")
-            if len(delegate_targets) > 0:
-                # Delegate the task to other agents by publishing messages to the corresponding topics.
-                for topic_type, task in delegate_targets:
-                    print(f"{'-'*80}\n{self.id.type}:\nDelegating to {topic_type}", flush=True)
-                    await self.publish_message(task, topic_id=TopicId(topic_type, source=self.id.key))
-            if len(tool_call_results) > 0:
-                print(f"{'-'*80}\n{self.id.type}:\n{tool_call_results}", flush=True)
-                # Make another LLM call with the results.
-                message.context.extend(
-                    [
-                        AssistantMessage(content=llm_result.content, source=self.id.type),
-                        FunctionExecutionResultMessage(content=tool_call_results),
-                    ]
-                )
-                llm_result = await self._model_client.create(
-                    messages=[self._system_message] + message.context,
-                    tools=self._tool_schema + self._delegate_tool_schema,
-                    cancellation_token=ctx.cancellation_token,
-                )
-                print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
-            else:
-                # The task has been delegated, so we are done.
-                return
-        # The task has been completed, publish the final result.
-        assert isinstance(llm_result.content, str)
-        message.context.append(AssistantMessage(content=llm_result.content, source=self.id.type))
-        await self.publish_message(
-            AgentResponse(context=message.context, reply_to_topic_type=self._agent_topic_type),
-            topic_id=TopicId(self._user_topic_type, source=self.id.key),
+        # If there are no tool calls, return the result.
+        if isinstance(llm_result.content, str):
+            return Message(content=llm_result.content)
+        assert isinstance(llm_result.content, list) and all(
+            isinstance(call, FunctionCall) for call in llm_result.content
         )
+
+        # Add the first model create result to the session.
+        session.append(AssistantMessage(content=llm_result.content, source="assistant"))
+
+        # Execute the tool calls.
+        tool_call_results = await asyncio.gather(
+            *[self._execute_tool_call(call, ctx.cancellation_token) for call in llm_result.content]
+        )
+        print(f"{'-'*80}\n{self.id.type}:\n{tool_call_results}", flush=True)
+
+        # Add the function execution results to the session.
+        session.append(FunctionExecutionResultMessage(content=tool_call_results))
+
+        # Run the chat completion again to reflect on the history and function execution results.
+        llm_result = await self._model_client.create(
+            messages=session,
+            cancellation_token=ctx.cancellation_token,
+        )
+        assert isinstance(llm_result.content, str)
+        print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
+        # Return the result as a message.
+        return Message(content=llm_result.content)
+
+    async def _execute_tool_call(
+        self, call: FunctionCall, cancellation_token: CancellationToken
+    ) -> FunctionExecutionResult:
+        # Find the tool by name.
+        tool = next((tool for tool in self._tools if tool.name == call.name), None)
+        assert tool is not None
+
+        # Run the tool and capture the result.
+        try:
+            arguments = json.loads(call.arguments)
+            result = await tool.run_json(arguments, cancellation_token)
+            return FunctionExecutionResult(
+                call_id=call.id, content=tool.return_value_as_string(result), is_error=False, name=tool.name
+            )
+        except Exception as e:
+            return FunctionExecutionResult(call_id=call.id, content=str(e), is_error=True, name=tool.name)
