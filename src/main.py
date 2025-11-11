@@ -7,6 +7,7 @@ from src.tools.calendar_tools import (
     add_event_to_calendar_tool,
     fetch_events_tool,
     reschedule_event_tool,
+    delete_event_tool,
 )
 from src.config import Settings
 from src.utils.messages import Message
@@ -29,7 +30,8 @@ async def setupAgent():
         get_datetime_tool,
         add_event_to_calendar_tool,
         fetch_events_tool,
-        reschedule_event_tool
+        reschedule_event_tool,
+        delete_event_tool
     ]
     # Register the calendar assistant agent
     await CalendarAssistantAgent.register(
