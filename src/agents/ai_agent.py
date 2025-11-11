@@ -20,24 +20,26 @@ from autogen_core.models import (
 from autogen_core.tools import Tool
 from src.utils.messages import Message
 
+session: List[LLMMessage] = []
+
 class CalendarAssistantAgent(RoutedAgent):
     def __init__(self, model_client: ChatCompletionClient, tool_schema: List[Tool]) -> None:
         super().__init__("An calendar assistant agent.")
         self._system_messages: List[LLMMessage] = [
-            SystemMessage(content="You are a helpful Google Calendar Assistant that can:\n"
+            SystemMessage(content="You are a helpful Google Calendar Assistant that can (using tools):\n"
                 "- Create google calendar events\n"
                 "- Delete google calendar events\n"
-                "- Read google calendar events and show the user\n"
+                "- Fetch google calendar events and show the user\n"
                 "- Reshecdule google calendar events\n"
-                "--- Follow the routine below when interacting with the user:\n"
+                "--- Follow the Instructions below when interacting with the user:\n"
                 "1. Always get the current date, time and timezone using the appropriate tool.\n"
-                "2. Ask them the details of the event they want to add to their calendar including the title of the event, time it starts and how long it is.\n"
-                "3. Always Show the event created to the user in readable form and ask for a confirmation of details. "
+                "2. If the user asks about their schedule, availability, or existing events for a date, call the appropriate tool with the timeMin and timeMax values (in ISO 8601 format)."
+                "3. When adding an event to the calendar ask them the details of the event they want to add to their calendar including the title of the event, time it starts and how long it is.\n"
+                "4. Always Show the event created to the user in readable form and ask for a confirmation of details. "
                 "Also, display the event in the required Google Calendar event JSON format.\n"
-                "4. Once the user is satisfied, go on to add the event to their google calendar using the appropriate tool.\n"
-                "Before adding an event to the calendar, always check the time slot in the calendar to ensure there are no conflicts."
+                "5. Before adding an event to the calendar, always check the time slot in the calendar to ensure there are no conflicts."
                 "If another event exists at the same time, inform the user and ask whether to proceed.\n"
-                "When rescheduling events use the appropriate tool to first read and confirm the event. "
+                "6. When rescheduling events use the appropriate tool to first read and confirm the event exists. "
                 "Then ask the user for confirmation before updating it.\n"
             )
         ]
@@ -47,43 +49,46 @@ class CalendarAssistantAgent(RoutedAgent):
     @message_handler
     async def handle_user_message(self, message: Message, ctx: MessageContext) -> Message:
         # Create a session of messages.
-        session: List[LLMMessage] = self._system_messages + [UserMessage(content=message.content, source="user")]
+        session.append(self._system_messages[0])
+        session.append(UserMessage(content=message.content, source="user"))
 
-        # Run the chat completion with the tools.
-        llm_result = await self._model_client.create(
-            messages=session,
-            tools=self._tools,
-            cancellation_token=ctx.cancellation_token,
-        )
-        print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
-        # If there are no tool calls, return the result.
-        if isinstance(llm_result.content, str):
-            return Message(content=llm_result.content)
-        assert isinstance(llm_result.content, list) and all(
-            isinstance(call, FunctionCall) for call in llm_result.content
-        )
+        while True:
+            # Run the chat completion with the tools.
+            llm_result = await self._model_client.create(
+                messages=session,
+                tools=self._tools,
+                cancellation_token=ctx.cancellation_token,
+            )
 
-        # Add the first model create result to the session.
-        session.append(AssistantMessage(content=llm_result.content, source="assistant"))
+            # Add the first model create result to the session.
+            session.append(AssistantMessage(content=llm_result.content, source="assistant"))
 
-        # Execute the tool calls.
-        tool_call_results = await asyncio.gather(
-            *[self._execute_tool_call(call, ctx.cancellation_token) for call in llm_result.content]
-        )
-        print(f"{'-'*80}\n{self.id.type}:\n{tool_call_results}", flush=True)
+            print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
+            # If there are no tool calls, return the result.
+            if isinstance(llm_result.content, str):
+                return Message(content=llm_result.content)
+            assert isinstance(llm_result.content, list) and all(
+                isinstance(call, FunctionCall) for call in llm_result.content
+            )
 
-        # Add the function execution results to the session.
-        session.append(FunctionExecutionResultMessage(content=tool_call_results))
+            # Execute the tool calls.
+            tool_call_results = await asyncio.gather(
+                *[self._execute_tool_call(call, ctx.cancellation_token) for call in llm_result.content]
+            )
+            print(f"{'-'*80}\n{self.id.type}:\n{tool_call_results}", flush=True)
 
-        # Run the chat completion again to reflect on the history and function execution results.
-        llm_result = await self._model_client.create(
-            messages=session,
-            cancellation_token=ctx.cancellation_token,
-        )
-        assert isinstance(llm_result.content, str)
-        print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
-        # Return the result as a message.
-        return Message(content=llm_result.content)
+            # Add the function execution results to the session.
+            session.append(FunctionExecutionResultMessage(content=tool_call_results))
+
+#  # Run the chat completion again to reflect on the history and function execution results.
+#         llm_result = await self._model_client.create(
+#             messages=session,
+#             cancellation_token=ctx.cancellation_token,
+#         )
+#         assert isinstance(llm_result.content, str)
+#         print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
+#         # Return the result as a message.
+#         return Message(content=llm_result.content)       
 
     async def _execute_tool_call(
         self, call: FunctionCall, cancellation_token: CancellationToken

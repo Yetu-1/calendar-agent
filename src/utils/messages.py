@@ -1,13 +1,12 @@
 from typing import List
 from pydantic import BaseModel, Field
-from datetime import datetime
 
 class Message(BaseModel):
     content: str
     
 class EventDateTime(BaseModel):
-    dateTime: datetime = Field(..., description="Event start datetime in ISO 8601 format")
-    timeZone: str | None = Field(None, description="timezone of event") #. tbd - Make this required.
+    dateTime: str = Field(..., description="Event datetime string in ISO 8601 format")
+    timeZone: str = Field(None, description="timezone of event") #. tbd - Make this required.
 
 class CalendarEvent(BaseModel):
     summary: str = Field(..., description="Short title for the event")
