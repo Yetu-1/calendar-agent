@@ -18,7 +18,7 @@ from autogen_core.models import (
     FunctionExecutionResultMessage,
 )
 from autogen_core.tools import Tool
-from src.utils.messages import Message
+from src.tools.messages import Message
 
 session: List[LLMMessage] = []
 
@@ -78,17 +78,7 @@ class CalendarAssistantAgent(RoutedAgent):
             print(f"{'-'*80}\n{self.id.type}:\n{tool_call_results}", flush=True)
 
             # Add the function execution results to the session.
-            session.append(FunctionExecutionResultMessage(content=tool_call_results))
-
-#  # Run the chat completion again to reflect on the history and function execution results.
-#         llm_result = await self._model_client.create(
-#             messages=session,
-#             cancellation_token=ctx.cancellation_token,
-#         )
-#         assert isinstance(llm_result.content, str)
-#         print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
-#         # Return the result as a message.
-#         return Message(content=llm_result.content)       
+            session.append(FunctionExecutionResultMessage(content=tool_call_results))    
 
     async def _execute_tool_call(
         self, call: FunctionCall, cancellation_token: CancellationToken

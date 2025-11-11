@@ -10,7 +10,7 @@ from src.tools.calendar_tools import (
     delete_event_tool,
 )
 from src.config import Settings
-from src.utils.messages import Message
+from src.tools.messages import Message
 from fastapi import FastAPI
 
 app = FastAPI()

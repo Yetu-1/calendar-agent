@@ -1,18 +1,35 @@
 from autogen_core.tools import FunctionTool
-from src.utils.messages import CalendarEvent, EventDateTime
-from src.utils.calendar_client import CalendarClient
+from src.tools.messages import CalendarEvent, EventDateTime
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
 from src.config import Settings
 from datetime import datetime
+from pathlib import Path
 import tzlocal
+
+# Path to the service account JSON file for Google API authentication. 
+service_account_file_path = Path(__file__).parent / "service_account.json"
+
+class CalendarClient: 
+    def __init__(self):
+        # Initialize the Google Calendar API client with service account credentials
+        self.service = build("calendar", "v3", 
+            credentials = service_account.Credentials.from_service_account_file(
+                service_account_file_path,
+                scopes=["https://www.googleapis.com/auth/calendar"]
+            )
+        )
 
 def add_event_to_calendar(event: CalendarEvent) -> str:
     client = CalendarClient();
-    result = client.service.events().insert(calendarId=Settings.CALENDAR_ID, body=event.model_dump()).execute()
+    result = client.service.events().insert(
+        calendarId=Settings.CALENDAR_ID, body=event.model_dump()  # Converts Pydantic model to dict
+    ).execute()
     return f"Result: {result}"
 
 def get_date_and_time() -> str:
-    time_zone = tzlocal.get_localzone()
-    date_and_time = datetime.now(time_zone)
+    time_zone = tzlocal.get_localzone() # Detect system timezone
+    date_and_time = datetime.now(time_zone) 
     return (
         f"Today's date and time: {date_and_time}.\n"
         f"TIME ZONE: {time_zone}.\n"
@@ -40,7 +57,7 @@ def patch_event(event_id: str, start: EventDateTime, end: EventDateTime) -> str:
             calendarId=Settings.CALENDAR_ID,
             eventId=event_id,
             body={
-                "start": start.model_dump(),
+                "start": start.model_dump(),  # Converts Pydantic model to dict
                 "end": end.model_dump(),   
             }
     ).execute()
