@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Dict
 import asyncio
 from autogen_core import (
     FunctionCall,
@@ -20,7 +20,7 @@ from autogen_core.models import (
 from autogen_core.tools import Tool
 from src.tools.messages import Message
 
-session: List[LLMMessage] = []
+sessions: Dict[str, List[LLMMessage]] = {}
 
 class CalendarAssistantAgent(RoutedAgent):
     def __init__(self, model_client: ChatCompletionClient, tool_schema: List[Tool]) -> None:
@@ -49,19 +49,22 @@ class CalendarAssistantAgent(RoutedAgent):
     @message_handler
     async def handle_user_message(self, message: Message, ctx: MessageContext) -> Message:
         # Create a session of messages.
-        session.append(self._system_messages[0])
-        session.append(UserMessage(content=message.content, source="user"))
+        if message.client_id not in sessions:
+            sessions[message.client_id] = []
+            sessions[message.client_id].append(self._system_messages[0]) # Append the system message
+
+        sessions[message.client_id].append(UserMessage(content=message.content, source="user"))
 
         while True:
             # Run the chat completion with the tools.
             llm_result = await self._model_client.create(
-                messages=session,
+                messages=sessions[message.client_id],
                 tools=self._tools,
                 cancellation_token=ctx.cancellation_token,
             )
 
             # Add the first model create result to the session.
-            session.append(AssistantMessage(content=llm_result.content, source="assistant"))
+            sessions[message.client_id].append(AssistantMessage(content=llm_result.content, source="assistant"))
 
             print(f"{'-'*80}\n{self.id.type}:\n{llm_result.content}", flush=True)
             # If there are no tool calls, return the result.
@@ -78,7 +81,7 @@ class CalendarAssistantAgent(RoutedAgent):
             print(f"{'-'*80}\n{self.id.type}:\n{tool_call_results}", flush=True)
 
             # Add the function execution results to the session.
-            session.append(FunctionExecutionResultMessage(content=tool_call_results))    
+            sessions[message.client_id].append(FunctionExecutionResultMessage(content=tool_call_results))    
 
     async def _execute_tool_call(
         self, call: FunctionCall, cancellation_token: CancellationToken

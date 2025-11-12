@@ -11,7 +11,7 @@ from src.tools.calendar_tools import (
 )
 from src.config import Settings
 from src.tools.messages import Message
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 app = FastAPI()
 # Create a runtime.
@@ -21,7 +21,24 @@ model_client = OpenAIChatCompletionClient(
     model="gpt-4o-mini",
     api_key=Settings.OPENAI_API_KEY,
 )
+
 calendar_assistant_agent = AgentId("calendar_assistant_agent", "default")
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+manager = ConnectionManager()
 
 @app.on_event("startup")
 async def setupAgent():
@@ -47,16 +64,23 @@ async def setupAgent():
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Server Running"}
 
-@app.post("/assistant")
-async def root(message: Message):
-    # Send a direct message to the calendar assistant agent agent.
-    response = await runtime.send_message(Message(content=message.content), calendar_assistant_agent)
-    return {"response": response.content}
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await manager.connect(websocket)
+    try:
+        while True:
+            message =  Message(client_id=client_id, content=await websocket.receive_text())
+            # Send the message to the calendar assistant agent.
+            response = await runtime.send_message(message, calendar_assistant_agent)
+            await manager.send_message(f"Assistant: {response.content}", websocket)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
-@app.post("/assistant/exit")
-async def root(message: Message):
+
+@app.on_event("shutdown")
+async def shutdown_runtime():
     # Run until completion (Stop processing messages).
     await runtime.stop_when_idle()
     await model_client.close()
