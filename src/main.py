@@ -9,9 +9,20 @@ from src.tools.calendar_tools import (
     reschedule_event_tool,
     delete_event_tool,
 )
+from typing import List
+from autogen_core.tools import Tool
 from src.config import Settings
 from src.tools.messages import Message
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from contextlib import asynccontextmanager
+
+tools: List[Tool] = [
+    get_datetime_tool,
+    add_event_to_calendar_tool,
+    fetch_events_tool,
+    reschedule_event_tool,
+    delete_event_tool
+]
 
 app = FastAPI()
 # Create a runtime.
@@ -23,6 +34,27 @@ model_client = OpenAIChatCompletionClient(
 )
 
 calendar_assistant_agent = AgentId("calendar_assistant_agent", "default")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Register the calendar assistant agent
+    await CalendarAssistantAgent.register(
+        runtime,
+        "calendar_assistant_agent",
+        lambda: CalendarAssistantAgent(
+            model_client=model_client,
+            tool_schema=tools,
+        ),
+    )
+    # Start the runtime (Start processing messages).
+    runtime.start()
+    yield
+    # Stop the runtime (Stop processing messages).
+    await runtime.stop_when_idle()
+    await model_client.close() # close the model client session
+
+
+app = FastAPI(lifespan=lifespan)
 
 class ConnectionManager:
     def __init__(self):
@@ -40,27 +72,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-@app.on_event("startup")
-async def setupAgent():
-
-    tools: List[Tool] = [
-        get_datetime_tool,
-        add_event_to_calendar_tool,
-        fetch_events_tool,
-        reschedule_event_tool,
-        delete_event_tool
-    ]
-    # Register the calendar assistant agent
-    await CalendarAssistantAgent.register(
-        runtime,
-        "calendar_assistant_agent",
-        lambda: CalendarAssistantAgent(
-            model_client=model_client,
-            tool_schema=tools,
-        ),
-    )
-    # Start the runtime (Start processing messages).
-    runtime.start()
 
 @app.get("/")
 async def root():
@@ -77,10 +88,3 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             await manager.send_message(f"Assistant: {response.content}", websocket)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-
-
-@app.on_event("shutdown")
-async def shutdown_runtime():
-    # Run until completion (Stop processing messages).
-    await runtime.stop_when_idle()
-    await model_client.close()
