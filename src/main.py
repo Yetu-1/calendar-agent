@@ -1,27 +1,11 @@
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 from src.agents.ai_agent import CalendarAssistantAgent
 from autogen_core import AgentId, SingleThreadedAgentRuntime
-from src.tools.calendar_tools import (
-    get_datetime_tool,
-    add_event_to_calendar_tool,
-    fetch_events_tool,
-    reschedule_event_tool,
-    delete_event_tool,
-)
-from typing import List
-from autogen_core.tools import Tool
+from src.tools.calendar_tools import calendar_agent_tools
 from src.config import Settings
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from src.routes import router, runtime
-
-tools: List[Tool] = [
-    get_datetime_tool,
-    add_event_to_calendar_tool,
-    fetch_events_tool,
-    reschedule_event_tool,
-    delete_event_tool
-]
 
 # Create the model client.
 model_client = OpenAIChatCompletionClient(
@@ -37,7 +21,7 @@ async def lifespan(app: FastAPI):
         "calendar_assistant_agent",
         lambda: CalendarAssistantAgent(
             model_client=model_client,
-            tool_schema=tools,
+            tool_schema=calendar_agent_tools,
         ),
     )
     # Start the runtime (Start processing messages).

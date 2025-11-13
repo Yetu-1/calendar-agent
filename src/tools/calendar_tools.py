@@ -2,9 +2,11 @@ from autogen_core.tools import FunctionTool
 from src.tools.messages import CalendarEvent, EventDateTime
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from autogen_core.tools import Tool
 from src.config import Settings
 from datetime import datetime
 from pathlib import Path
+from typing import List
 import tzlocal
 
 # Path to the service account JSON file for Google API authentication. 
@@ -79,3 +81,11 @@ add_event_to_calendar_tool = FunctionTool(
 fetch_events_tool = FunctionTool(fetch_events, description="Use this tool to fetch events from the calendar.")
 reschedule_event_tool = FunctionTool(patch_event, description="Use the tool to reschedule and update event in the calendar.")
 delete_event_tool = FunctionTool(delete_event, description="Use this to to delete events in the calendar")
+
+calendar_agent_tools: List[Tool] = [
+    get_datetime_tool,
+    add_event_to_calendar_tool,
+    fetch_events_tool,
+    reschedule_event_tool,
+    delete_event_tool
+]
